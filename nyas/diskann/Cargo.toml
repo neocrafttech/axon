@@ -21,3 +21,11 @@ serde.workspace = true
 rkyv.workspace = true
 tracing.workspace = true
 system = { path = "../system" }
+
+[[bench]]
+name = "sift10k_index_10k"
+harness = false
+
+[[bench]]
+name = "sift10k_search_10k"
+harness = false

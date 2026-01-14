@@ -13,7 +13,7 @@ pub struct IndexView {
 impl IndexView {
     pub async fn new(index_name: &str) -> Result<Self, Error> {
         let in_disk_index =
-            InDiskIndex::new(index_name, 32, 1.2, 128, 9999, MetricType::L2).await?;
+            InDiskIndex::new(index_name, 32, 1.2, 128, 500_000, MetricType::L2).await?;
         Ok(IndexView { in_disk_index })
     }
 
@@ -27,9 +27,10 @@ impl IndexView {
     }
 
     pub async fn search(&self, query: &VectorData, k: usize, l: usize) -> Vec<u32> {
-        //TODO: Implement streaming merge as background task
-        let result = self.in_disk_index.streaming_merge().await;
-        println!("Streaming merge result: {:?}", result);
         self.in_disk_index.search(query, k, l).await
+    }
+
+    pub async fn streaming_merge(&self) -> std::io::Result<()> {
+        self.in_disk_index.streaming_merge().await
     }
 }
