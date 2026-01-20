@@ -1,0 +1,11 @@
+target/
+.git/
+examples/data/
+**/*.fvecs
+**/*.ivecs
+**/*.bvecs
+.env
+.DS_Store
+*.md
+LICENSE
+rustfmt.toml

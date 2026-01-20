@@ -150,6 +150,7 @@ pub fn compute_recall(results: &[Vec<u32>], ground_truth: &[Vec<u32>], k: usize)
     total_matches as f64 / (num_queries * k) as f64
 }
 
+#[allow(dead_code)]
 pub async fn compute_recall_at_k(
     index_view: &IndexView, query: &SiftDataset, ground_truth: &[Vec<u32>], k: usize,
 ) {

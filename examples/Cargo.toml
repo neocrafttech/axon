@@ -12,12 +12,18 @@ version.workspace = true
 [dependencies]
 diskann = { path = "../nyas/diskann" }
 system = { path = "../nyas/system" }
+service = { path = "../nyas/service" }
 tokio.workspace = true
+tonic.workspace = true
 cpu-time = "1.0.0"
 
 [[bin]]
 name = "sift10k_index"
 path = "src/sift10k_index.rs"
+
+[[bin]]
+name = "sift10k_index_grpc"
+path = "src/sift10k_index_grpc.rs"
 
 [[bin]]
 name = "sift1m_index"

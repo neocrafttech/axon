@@ -1,9 +1,6 @@
-use std::sync::Arc;
-
+use diskann::index_view::IndexView;
 use mimalloc::MiMalloc;
 use service::{VectorService, vector};
-use system::vector_db::VectorDB;
-use tokio::sync::Mutex;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -12,10 +9,11 @@ static GLOBAL: MiMalloc = MiMalloc;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
-    let db = Arc::new(Mutex::new(VectorDB::new(128))); // dimension 128
-    let svc = VectorService { db: db.clone() };
+    // Initialize IndexView with index name "vector_db"
+    let index_view = IndexView::new("vector_db").await?;
+    let svc = VectorService::new(index_view);
 
-    let addr = "127.0.0.1:50051".parse()?;
+    let addr = "0.0.0.0:50051".parse()?;
     println!("VectorDB gRPC server listening on {}", addr);
 
     tonic::transport::Server::builder()

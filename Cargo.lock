@@ -1099,8 +1099,10 @@ version = "0.1.0"
 dependencies = [
  "cpu-time",
  "diskann",
+ "service",
  "system",
  "tokio",
+ "tonic",
 ]
 
 [[package]]
@@ -1650,6 +1652,7 @@ dependencies = [
 name = "service"
 version = "0.1.0"
 dependencies = [
+ "diskann",
  "prost",
  "system",
  "tokio",
@@ -2049,6 +2052,7 @@ dependencies = [
 name = "vecd"
 version = "0.1.0"
 dependencies = [
+ "diskann",
  "env_logger",
  "mimalloc",
  "service",

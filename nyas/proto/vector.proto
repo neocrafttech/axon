@@ -10,6 +10,7 @@ service VectorDB {
   rpc InsertVector (InsertVectorRequest) returns (InsertVectorResponse);
   rpc SearchVector (SearchVectorRequest) returns (SearchVectorResponse);
   rpc BuildIndex (BuildIndexRequest) returns (BuildIndexResponse);
+  rpc DeleteVector (DeleteVectorRequest) returns (DeleteVectorResponse);
 }
 
 enum IndexType {
@@ -43,5 +44,13 @@ message BuildIndexRequest {
 }
 
 message BuildIndexResponse {
+  bool success = 1;
+}
+
+message DeleteVectorRequest {
+  string id = 1;
+}
+
+message DeleteVectorResponse {
   bool success = 1;
 }

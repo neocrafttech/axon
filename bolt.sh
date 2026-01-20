@@ -2,13 +2,95 @@
 set -e
 
 RUST_VERSION="1.92.0"
-
+PROTOBUF_VERSION="21.12"
 format() {
     cargo +nightly fmt;
 }
 
+setup_protobuf() {
+    echo "[INFO] Checking Protobuf installation..."
+    
+    OS="$(uname -s)"
+    ARCH="$(uname -m)"
+
+    if [ "$OS" = "Linux" ]; then
+        sudo apt-get update -y
+        sudo apt-get install -y protobuf-compiler unzip
+        PROTO_OS="linux"
+    elif [ "$OS" = "Darwin" ]; then
+        if ! command -v brew >/dev/null 2>&1; then
+            echo "[WARN] Homebrew not found. Manual install will proceed but system dependencies might be missing."
+        fi
+        PROTO_OS="osx"
+    else
+        echo "[ERROR] Unsupported OS: $OS"
+        exit 1
+    fi
+
+    if [ "$ARCH" = "x86_64" ]; then
+        PROTO_ARCH="x86_64"
+    elif [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+        if [ "$PROTO_OS" = "osx" ]; then
+            PROTO_ARCH="aarch_64"
+        else
+            PROTO_ARCH="aarch_64"
+        fi
+    else
+        echo "[ERROR] Unsupported architecture: $ARCH"
+        exit 1
+    fi
+
+    ZIP_FILE="protoc-$PROTOBUF_VERSION-$PROTO_OS-$PROTO_ARCH.zip"
+
+    if command -v protoc >/dev/null 2>&1; then
+        CURRENT_VERSION=$(protoc --version | awk '{print $2}')
+        echo "[INFO] Found Protobuf version $CURRENT_VERSION"
+        if [ "$CURRENT_VERSION" != "$PROTOBUF_VERSION" ]; then
+            echo "[INFO] Updating Protobuf to $PROTOBUF_VERSION..."
+            curl -L "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOBUF_VERSION/$ZIP_FILE" -o protoc.zip
+            unzip -o protoc.zip
+            
+            SUDO=""
+            if [ ! -w "/usr/local/bin" ] || [ ! -w "/usr/local/include" ]; then
+                SUDO="sudo"
+            fi
+
+            $SUDO mv bin/protoc /usr/local/bin/
+            # Copy contents to avoid nesting and ensure we don't delete existing include dir if it has other things
+            $SUDO mkdir -p /usr/local/include/google
+            $SUDO cp -r include/google/* /usr/local/include/google/
+            
+            rm -rf protoc.zip bin include readme.txt
+        else
+            echo "[OK] Protobuf is already $PROTOBUF_VERSION"
+        fi
+    else
+        echo "[INFO] Protobuf not found. Installing Protobuf $PROTOBUF_VERSION..."
+        curl -L "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOBUF_VERSION/$ZIP_FILE" -o protoc.zip
+        unzip -o protoc.zip
+        
+        SUDO=""
+        if [ ! -w "/usr/local/bin" ] || [ ! -w "/usr/local/include" ]; then
+            SUDO="sudo"
+        fi
+
+        $SUDO mv bin/protoc /usr/local/bin/
+        $SUDO mkdir -p /usr/local/include/google
+        $SUDO cp -r include/google/* /usr/local/include/google/
+        
+        rm -rf protoc.zip bin include readme.txt
+    fi
+}
+
 setup_rust(){
     echo "[INFO] Checking Rust installation..."
+    
+    OS="$(uname -s)"
+    if [ "$OS" = "Linux" ]; then
+        sudo apt-get update -y
+        sudo apt-get install -y build-essential curl
+    fi
+
     if command -v rustc >/dev/null 2>&1; then
         CURRENT_VERSION=$(rustc --version | awk '{print $2}')
         echo "[INFO] Found Rust version $CURRENT_VERSION"
@@ -24,6 +106,8 @@ setup_rust(){
     fi
 
     export PATH="$HOME/.cargo/bin:$PATH"
+    source "$HOME/.cargo/env" 2>/dev/null || true
+    
     rustc --version
     cargo --version
 
@@ -36,6 +120,7 @@ setup_rust(){
 
 setup() {
     setup_rust
+    setup_protobuf
 }
 
 clean() {
@@ -59,8 +144,8 @@ check() {
 }
 
 build() {
-    echo "[INFO] Building..."
-    cargo build --release
+    echo "[INFO] Building with native CPU optimizations..."
+    RUSTFLAGS="-C target-cpu=native" cargo build --release
     echo "[OK] Build completed!"
 }
 
@@ -119,7 +204,7 @@ main() {
             setup
             check
             build
-            deploy
+            # deploy removed as it is not defined
             ;;
         help|""|*)
             help
