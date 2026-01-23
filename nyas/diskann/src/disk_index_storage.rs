@@ -467,8 +467,11 @@ impl DiskIndexStorage {
                 cached
             } else if let Ok(disk_data) = self.read_node(current.point_id).await {
                 add_to_cache(&mut node_cache, disk_data);
-
-                node_cache.get(&current.point_id).unwrap()
+                if let Some(node_pair) = node_cache.get(&current.point_id) {
+                    node_pair
+                } else {
+                    continue;
+                }
             } else {
                 continue;
             };
@@ -500,8 +503,11 @@ impl DiskIndexStorage {
                     vector.distance(query, metric_type)
                 } else if let Ok(neighbor_data) = self.read_node(neighbor_id).await {
                     add_to_cache(&mut node_cache, neighbor_data);
-                    let vector = &node_cache.get(&neighbor_id).unwrap().1;
-                    vector.distance(query, metric_type)
+                    if let Some(vector) = node_cache.get(&neighbor_id) {
+                        vector.1.distance(query, metric_type)
+                    } else {
+                        continue;
+                    }
                 } else {
                     continue;
                 };

@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use dashmap::{DashMap, DashSet};
 use system::metric::MetricType;
@@ -56,14 +55,8 @@ impl InDiskIndex {
 
     pub async fn insert(&self, point: &VectorPoint) -> Result<(), String> {
         let mut rw_temp = self.rw_temp_index.write().await;
-        let current_time = SystemTime::now();
+        // let current_time = SystemTime::now();
         rw_temp.insert(point);
-        println!(
-            "Insertion time: {:?} for point {:?} size of temp {}",
-            current_time.elapsed(),
-            point.id,
-            rw_temp.size()
-        );
 
         // Check if we need to snapshot
         if rw_temp.size() >= self.max_temp_size {
@@ -200,6 +193,7 @@ impl InDiskIndex {
 
 #[cfg(test)]
 mod in_disk_index_test {
+    use std::time::SystemTime;
     use system::metric::MetricType;
     use system::vector_data::VectorData;
     use system::vector_point::VectorPoint;

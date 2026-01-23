@@ -15,6 +15,7 @@ tonic.workspace = true
 prost.workspace = true
 tonic-prost.workspace = true
 system = { path = "../system" }
+diskann = { path = "../diskann" }
 
 [build-dependencies]
 tonic-prost-build = "0.14.2"

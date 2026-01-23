@@ -16,3 +16,4 @@ tokio.workspace = true
 tonic.workspace = true
 service = { path = "../service" }
 system = { path = "../system" }
+diskann = { path = "../diskann" }
