@@ -1,5 +1,5 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use dashmap::DashMap;
 use rayon::prelude::*;
@@ -15,7 +15,7 @@ pub struct InMemIndex {
     /// Points stored in the index
     pub points: DashMap<u32, VectorPoint>,
     /// Start node for navigation
-    pub start_node: Option<u32>,
+    pub start_node: RwLock<Option<u32>>,
     /// Maximum out-degree
     pub r: usize,
     /// Alpha parameter for RNG property
@@ -34,7 +34,7 @@ impl InMemIndex {
         InMemIndex {
             graph: DashMap::new(),
             points: DashMap::new(),
-            start_node: None,
+            start_node: RwLock::new(None),
             r,
             alpha,
             l_build,
@@ -43,21 +43,27 @@ impl InMemIndex {
         }
     }
 
-    pub fn insert(&mut self, point: &VectorPoint) {
+    pub fn insert(&self, point: &VectorPoint) {
         debug_assert!(self.alpha > 1.0);
         self.points.insert(point.id, point.clone());
         self.locks.insert(point.id, Arc::new(Mutex::new(())));
+
+        let start_node = *self.start_node.read().unwrap();
+
         //Let's initialize the graph with the first point
-        if self.start_node.is_none() {
-            self.start_node = Some(point.id);
-            self.graph.insert(point.id, Vec::new());
-            return; //Just inserted first node, so no need to continue
+        if start_node.is_none() {
+            let mut start_lock = self.start_node.write().unwrap();
+            if start_lock.is_none() {
+                *start_lock = Some(point.id);
+                self.graph.insert(point.id, Vec::new());
+                return;
+            }
         }
 
+        let start_id = self.start_node.read().unwrap().unwrap();
+
         // Run greedy search to find candidates
-        debug_assert!(self.start_node.is_some());
-        let (_, visited) =
-            self.greedy_search(self.start_node.unwrap(), &point.vector, 1, self.l_build);
+        let (_, visited) = self.greedy_search(start_id, &point.vector, 1, self.l_build);
 
         // Prune the visited point to get out-neighbors for the new point
         let out_neighbors = self.robust_prune(point.id, visited, self.alpha);
@@ -170,9 +176,12 @@ impl InMemIndex {
         };
 
         // Step 1: V ← (V + N_out(p)) - {p}
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::with_capacity(candidates.len() + self.r);
         seen.insert(point_id);
         candidates.retain(|id| *id != point_id);
+        for id in &candidates {
+            seen.insert(*id);
+        }
         if let Some(neighbors) = self.graph.get(&point_id) {
             for n in neighbors.value() {
                 if seen.insert(*n) {
@@ -181,34 +190,49 @@ impl InMemIndex {
             }
         }
 
-        let mut candidate_data: Vec<SearchCandidate> = candidates
-            .into_par_iter()
-            .filter_map(|id| {
-                self.points.get(&id).map(|p| SearchCandidate {
-                    point_id: id,
-                    distance: point.distance(&p, self.metric),
+        // Optimization: Use sequential iterator for small candidate sets to avoid rayon overhead
+        let mut candidate_data: Vec<SearchCandidate> = if candidates.len() < 500 {
+            candidates
+                .into_iter()
+                .filter_map(|id| {
+                    self.points.get(&id).map(|p| SearchCandidate {
+                        point_id: id,
+                        distance: point.distance(&p, self.metric),
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        } else {
+            candidates
+                .into_par_iter()
+                .filter_map(|id| {
+                    self.points.get(&id).map(|p| SearchCandidate {
+                        point_id: id,
+                        distance: point.distance(&p, self.metric),
+                    })
+                })
+                .collect()
+        };
 
         candidate_data.sort_by(|a, b| b.cmp(a));
 
         // Step 2 & 3: Prune candidates that don't satisfy the alpha-RNG condition
         let mut new_neighbors = Vec::with_capacity(self.r);
-        let mut new_neighbor_points: Vec<VectorPoint> = Vec::with_capacity(self.r);
+        let mut new_neighbor_points_ref = Vec::with_capacity(self.r);
 
         for candidate in candidate_data {
             let Some(point_c) = self.points.get(&candidate.point_id) else {
                 continue;
             };
 
-            let keep = !new_neighbor_points.iter().any(|point_n| {
-                alpha * point_n.distance(&point_c, self.metric) <= candidate.distance
-            });
+            let keep = !new_neighbor_points_ref.iter().any(
+                |point_n_ref: &dashmap::mapref::one::Ref<'_, u32, VectorPoint>| {
+                    alpha * point_n_ref.distance(&point_c, self.metric) <= candidate.distance
+                },
+            );
 
             if keep {
                 new_neighbors.push(candidate.point_id);
-                new_neighbor_points.push(point_c.clone());
+                new_neighbor_points_ref.push(point_c);
             }
             if new_neighbors.len() >= self.r {
                 break;
@@ -218,6 +242,7 @@ impl InMemIndex {
         new_neighbors
     }
 
+    #[allow(dead_code)]
     pub fn delete(&mut self, delete_list: &[u32]) {
         let delete_set: HashSet<_> = delete_list.iter().cloned().collect();
 
@@ -271,8 +296,11 @@ impl InMemIndex {
             self.locks.remove(point_id);
 
             // Update start_node if it was deleted
-            if self.start_node == Some(*point_id) {
-                self.start_node = self.graph.iter().next().map(|r| *r.key());
+            {
+                let mut start_lock = self.start_node.write().unwrap();
+                if *start_lock == Some(*point_id) {
+                    *start_lock = self.graph.iter().next().map(|r| *r.key());
+                }
             }
         }
     }
@@ -280,8 +308,8 @@ impl InMemIndex {
     /// Search for k nearest neighbors
     #[allow(dead_code)]
     pub(crate) fn search(&self, query: &VectorData, k: usize, l: usize) -> Vec<u32> {
-        if let Some(start_id) = &self.start_node {
-            let (result, _) = self.greedy_search(*start_id, query, k, l);
+        if let Some(start_id) = *self.start_node.read().unwrap() {
+            let (result, _) = self.greedy_search(start_id, query, k, l);
             result
         } else {
             Vec::new()
@@ -289,17 +317,28 @@ impl InMemIndex {
     }
 
     pub(crate) fn greedy_search_for_lti(
-        &self, query: &VectorData, l: usize, visited_map: &mut HashMap<u32, VectorPoint>,
+        &self, query: &VectorData, l: usize, visited_map: &mut HashMap<u32, f64>,
     ) {
-        if self.start_node.is_none() {
-            return;
-        }
-        let start_id = self.start_node.unwrap();
+        let start_id = {
+            let lock = self.start_node.read().unwrap();
+            if lock.is_none() {
+                return;
+            }
+            lock.unwrap()
+        };
         let (_, visited_ids) = self.greedy_search(start_id, query, l, l);
 
         for id in visited_ids {
             if let Some(point) = self.points.get(&id) {
-                visited_map.insert(id, point.clone());
+                let distance = point.distance_to_vector(query, self.metric);
+                visited_map
+                    .entry(id)
+                    .and_modify(|best| {
+                        if distance < *best {
+                            *best = distance;
+                        }
+                    })
+                    .or_insert(distance);
             }
         }
     }
@@ -319,7 +358,7 @@ mod in_mem_index_test {
 
     #[test]
     fn test_in_mem_index() {
-        let mut index = InMemIndex::new(32, 1.2, 50, MetricType::L2);
+        let index = InMemIndex::new(32, 1.2, 50, MetricType::L2);
 
         for i in 0..100 {
             let vector = VectorData::from_f32(vec![i as f32, (i * 2) as f32, (i * 3) as f32]);
@@ -348,7 +387,7 @@ mod in_mem_index_test {
                     use rand::Rng;
                     let mut rng = rand::rng();
 
-                    let mut index = InMemIndex::new($dim, $alpha, $l_build, $metric);
+                    let index = InMemIndex::new($dim, $alpha, $l_build, $metric);
 
                     for i in 0..$num_points {
                         let vec: Vec<f32> = (0..$dim).map(|_| rng.random::<f32>()).collect();

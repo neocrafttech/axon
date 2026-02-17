@@ -54,15 +54,17 @@ impl InDiskIndex {
     }
 
     pub async fn insert(&self, point: &VectorPoint) -> Result<(), String> {
-        let mut rw_temp = self.rw_temp_index.write().await;
-        // let current_time = SystemTime::now();
-        rw_temp.insert(point);
+        {
+            let rw_temp = self.rw_temp_index.read().await;
+            rw_temp.insert(point);
 
-        // Check if we need to snapshot
-        if rw_temp.size() >= self.max_temp_size {
-            drop(rw_temp);
-            self.snapshot_temp_index().await?;
+            if rw_temp.size() < self.max_temp_size {
+                return Ok(());
+            }
         }
+
+        // Only reach here if we need to snapshot
+        self.snapshot_temp_index().await?;
 
         Ok(())
     }
@@ -72,7 +74,7 @@ impl InDiskIndex {
     }
 
     pub async fn search(&self, query: &VectorData, k: usize, l: usize) -> Vec<u32> {
-        let mut visited_map: HashMap<u32, VectorPoint> = HashMap::new();
+        let mut visited_map: HashMap<u32, f64> = HashMap::new();
 
         // Search LTI
         let lti = self.lti.read().await;
@@ -81,19 +83,13 @@ impl InDiskIndex {
         // Search RW-TempIndex
         let rw_temp = self.rw_temp_index.read().await;
         rw_temp.greedy_search_for_lti(query, l, &mut visited_map);
-
-        println!("RW temp size {:?}", rw_temp.points.len());
         // Search RO-TempIndices
         let ro_temps = self.ro_temp_indices.read().await;
         for ro_temp in ro_temps.iter() {
             ro_temp.greedy_search_for_lti(query, l, &mut visited_map);
-            println!("RO temp size {:?}", ro_temp.points.len());
         }
 
-        let mut result_with_dist: Vec<_> = visited_map
-            .iter()
-            .map(|(id, point)| (*id, point.distance_to_vector(query, self.metric)))
-            .collect();
+        let mut result_with_dist: Vec<_> = visited_map.into_iter().collect();
 
         if result_with_dist.len() > k {
             let _ = result_with_dist.select_nth_unstable_by(k - 1, |a, b| {
@@ -102,18 +98,15 @@ impl InDiskIndex {
             result_with_dist.truncate(k);
         }
 
-        let mut top_k: Vec<u32> = result_with_dist.iter().map(|(id, _)| *id).collect();
-        println!("Length of top_k: {}, result: {:?}", top_k.len(), result_with_dist.len());
-        // println!("Top K {:?}", top_k);
+        result_with_dist
+            .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Greater));
 
         // Filter out deleted points
-        top_k.retain(|id| !self.delete_list.contains(id));
-
-        // Deduplicate and sort by distance
-        let unique_results: Vec<_> =
-            top_k.into_iter().collect::<DashSet<_>>().into_iter().collect();
-
-        unique_results.into_iter().take(k).collect()
+        result_with_dist
+            .into_iter()
+            .filter_map(|(id, _)| (!self.delete_list.contains(&id)).then_some(id))
+            .take(k)
+            .collect()
     }
 
     #[allow(dead_code)]
@@ -145,7 +138,7 @@ impl InDiskIndex {
         let snapshot = InMemIndex {
             graph: rw_temp.graph.clone(),
             points: rw_temp.points.clone(),
-            start_node: rw_temp.start_node,
+            start_node: std::sync::RwLock::new(*rw_temp.start_node.read().unwrap()),
             r: rw_temp.r,
             alpha: rw_temp.alpha,
             l_build: rw_temp.l_build,
@@ -164,27 +157,87 @@ impl InDiskIndex {
     #[allow(dead_code)]
     pub async fn streaming_merge(&self) -> io::Result<()> {
         let deletes: Vec<_> = self.delete_list.iter().map(|e| *e).collect();
+        let delete_set: std::collections::HashSet<u32> = deletes.iter().copied().collect();
 
+        let mut rw_temp = self.rw_temp_index.write().await;
         let mut ro_temps = self.ro_temp_indices.write().await;
-        if ro_temps.is_empty() {
+
+        if ro_temps.is_empty() && rw_temp.points.is_empty() {
             return Ok(());
         }
 
-        //TODO: Improve it to avoid combine
-        let mut combined = InMemIndex::new(self.r, self.alpha, self.l_build, self.metric);
+        // Fast path: no deletes and only one staged index to flush.
+        if delete_set.is_empty() {
+            if ro_temps.is_empty() {
+                let mut lti = self.lti.write().await;
+                lti.insert(&rw_temp).await?;
+                drop(lti);
 
-        for ro_temp in ro_temps.iter_mut() {
-            ro_temp.delete(&deletes);
-            for entry in ro_temp.points.iter() {
-                combined.insert(entry.value());
+                *rw_temp = InMemIndex::new(self.r, self.alpha, self.l_build, self.metric);
+                self.delete_list.clear();
+                return Ok(());
+            }
+
+            if ro_temps.len() == 1 && rw_temp.points.is_empty() {
+                let mut lti = self.lti.write().await;
+                lti.insert(&ro_temps[0]).await?;
+                drop(lti);
+
+                ro_temps.clear();
+                self.delete_list.clear();
+                return Ok(());
             }
         }
 
+        println!("Starting streaming merge of {} RO indices and RW index...", ro_temps.len());
+
+        // Deduplicate by ID while collecting with "newest wins" semantics:
+        // RW (newest) first, then RO snapshots from newest to oldest.
+        let mut seen = std::collections::HashSet::new();
+        let mut dedup_points: Vec<VectorPoint> = Vec::new();
+
+        // Collect points from RW index and filter deleted IDs.
+        for point_ref in rw_temp.points.iter() {
+            let point = point_ref.value().clone();
+            if !delete_set.contains(&point.id) && seen.insert(point.id) {
+                dedup_points.push(point);
+            }
+        }
+
+        // Collect points from RO indices from newest to oldest.
+        for ro_temp in ro_temps.iter().rev() {
+            for point_ref in ro_temp.points.iter() {
+                let point = point_ref.value().clone();
+                if !delete_set.contains(&point.id) && seen.insert(point.id) {
+                    dedup_points.push(point);
+                }
+            }
+        }
+
+        if dedup_points.is_empty() {
+            rw_temp.points.clear();
+            ro_temps.clear();
+            self.delete_list.clear();
+            return Ok(());
+        }
+
+        println!("Merging {} unique points...", dedup_points.len());
+
+        let combined = InMemIndex::new(self.r, self.alpha, self.l_build, self.metric);
+
+        // Rebuild in parallel from deduplicated points.
+        use rayon::prelude::*;
+        dedup_points.into_par_iter().for_each(|point| {
+            combined.insert(&point);
+        });
+
+        println!("Persisting combined index to disk...");
         let mut lti = self.lti.write().await;
         lti.insert(&combined).await?;
-
         drop(lti);
 
+        println!("Streaming merge completed. Clearing temporary indices.");
+        *rw_temp = InMemIndex::new(self.r, self.alpha, self.l_build, self.metric);
         ro_temps.clear();
         self.delete_list.clear();
         Ok(())
@@ -194,6 +247,7 @@ impl InDiskIndex {
 #[cfg(test)]
 mod in_disk_index_test {
     use std::time::SystemTime;
+
     use system::metric::MetricType;
     use system::vector_data::VectorData;
     use system::vector_point::VectorPoint;
@@ -229,7 +283,7 @@ mod in_disk_index_test {
         let system = InDiskIndex::new("test_index_2", 32, 1.2, 50, 20, MetricType::L2)
             .await
             .expect("Expects In Disk Index creation");
-        let mut in_mem_index = InMemIndex::new(32, 1.2, 50, MetricType::L2);
+        let in_mem_index = InMemIndex::new(32, 1.2, 50, MetricType::L2);
 
         for i in 0..50 {
             let vector = VectorData::from_f32(vec![i as f32, (i * 2) as f32, i as f32 / 2.0]);

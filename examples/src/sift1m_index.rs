@@ -3,11 +3,16 @@ use std::time::{Duration, SystemTime};
 
 use cpu_time::ProcessTime;
 use diskann::index_view::IndexView;
+use futures::StreamExt;
 use system::vector_point::VectorPoint;
 use tokio::io;
 
 use crate::index_utils::SiftDataset;
 mod index_utils;
+
+fn env_usize(name: &str) -> Option<usize> {
+    std::env::var(name).ok()?.parse::<usize>().ok().filter(|v| *v > 0)
+}
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -31,9 +36,27 @@ async fn main() -> io::Result<()> {
     let path = Path::new(index_name);
 
     if !path.exists() {
-        for (index, vector) in base.vectors.iter().enumerate() {
-            index_view.insert(&VectorPoint::new(index as u32, vector.clone())).await.unwrap();
-        }
+        println!("Starting insertion of {} points...", base.vectors.len());
+
+        let insert_parallelism = env_usize("NYAS_INSERT_CONCURRENCY").unwrap_or_else(|| {
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).max(4)
+        });
+        println!("Insert concurrency: {}", insert_parallelism);
+        let index_view_ref = &index_view;
+
+        futures::stream::iter(base.vectors.iter().enumerate())
+            .for_each_concurrent(insert_parallelism, |(index, vector)| async move {
+                let point = VectorPoint::new(index as u32, vector.clone());
+                index_view_ref.insert(&point).await.unwrap();
+            })
+            .await;
+
+        println!("Finished insertion.");
+
+        println!("Starting final streaming merge to disk...");
+        let merge_start = SystemTime::now();
+        index_view.streaming_merge().await.expect("Failed to perform final streaming merge");
+        println!("Final streaming merge took: {:?}", merge_start.elapsed().unwrap());
     }
 
     let index_cpu_time = start_cpu.elapsed();

@@ -227,7 +227,7 @@ impl DiskIndexStorage {
             metric_type: mem_index.metric,
             point_size: aligned_vector_size as u64,
             vector_per_block: vector_per_block as u64,
-            start_node: mem_index.start_node.unwrap_or(0),
+            start_node: mem_index.start_node.read().unwrap().unwrap_or(0),
         };
         self.meta = Some(disk_meta.clone());
 
@@ -424,9 +424,7 @@ impl DiskIndexStorage {
         Ok(meta)
     }
 
-    pub async fn search(
-        &self, query: &VectorData, l: usize, visited_map: &mut HashMap<u32, VectorPoint>,
-    ) {
+    pub async fn search(&self, query: &VectorData, l: usize, visited_map: &mut HashMap<u32, f64>) {
         if self.index_file.is_none() || self.meta.is_none() {
             return;
         };
@@ -437,7 +435,7 @@ impl DiskIndexStorage {
     }
 
     pub async fn greedy_search_ssd(
-        &self, visited_map: &mut HashMap<u32, VectorPoint>, start_node_id: u32, query: &VectorData,
+        &self, visited_map: &mut HashMap<u32, f64>, start_node_id: u32, query: &VectorData,
         l: usize, metric_type: MetricType,
     ) {
         let mut candidates = BinaryHeap::new();
@@ -476,8 +474,8 @@ impl DiskIndexStorage {
                 continue;
             };
 
-            let point = VectorPoint::new(node.id, vector.clone());
-            visited_map.insert(current.point_id, point);
+            let current_distance = vector.distance(query, metric_type);
+            visited_map.insert(current.point_id, current_distance);
 
             if visited_map.len() >= l {
                 break;

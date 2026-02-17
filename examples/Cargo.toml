@@ -16,6 +16,7 @@ service = { path = "../nyas/service" }
 tokio.workspace = true
 tonic.workspace = true
 cpu-time = "1.0.0"
+futures.workspace = true
 
 [[bin]]
 name = "sift10k_index"
