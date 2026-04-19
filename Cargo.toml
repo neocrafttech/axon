@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["examples", "nyas/diskann", "nyas/service", "nyas/system", "nyas/vecd"]
+members = ["examples", "axon/diskann", "axon/service", "axon/system", "axon/vecd"]
 
 [workspace.package]
 authors = ["Manish Kumar <manish@neocraft.tech>"]
@@ -8,8 +8,8 @@ edition = "2024"
 homepage = "https://neocraft.tech/"
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/neocrafttech/nyas"
-rust-version = "1.92.0"
+repository = "https://github.com/neocrafttech/axon"
+rust-version = "1.95.0"
 version = "0.1.0"
 
 [workspace.dependencies]
