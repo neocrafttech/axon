@@ -1,5 +1,5 @@
 [package]
-name = "nyas-examples"
+name = "axon-examples"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -10,9 +10,9 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-diskann = { path = "../nyas/diskann" }
-system = { path = "../nyas/system" }
-service = { path = "../nyas/service" }
+diskann = { path = "../axon/diskann" }
+system = { path = "../axon/system" }
+service = { path = "../axon/service" }
 tokio.workspace = true
 tonic.workspace = true
 cpu-time = "1.0.0"

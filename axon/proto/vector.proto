@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 option java_multiple_files = true;
-option java_package = "io.nyas.vector";
+option java_package = "io.axon.vector";
 option java_outer_classname = "VectorProto";
 
 package vector;

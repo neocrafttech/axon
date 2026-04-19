@@ -1,4 +1,4 @@
-FROM rust:1.92-slim AS builder
+FROM rust:1.95-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /usr/src/nyas
+WORKDIR /usr/src/axon
 
 COPY . .
 
@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /usr/local/bin
 
-COPY --from=builder /usr/src/nyas/target/release/vecd .
+COPY --from=builder /usr/src/axon/target/release/vecd .
 
 EXPOSE 50051
 

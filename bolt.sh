@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-RUST_VERSION="1.92.0"
+RUST_VERSION="1.95.0"
 PROTOBUF_VERSION="21.12"
 format() {
     cargo +nightly fmt;
